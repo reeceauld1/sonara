@@ -8,6 +8,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, QThread, Signal
 
 from core import type_beat
+from core import updater
 from core import video as video_core
 from core import youtube_auth
 from core import youtube_market
@@ -181,6 +182,40 @@ class MarketWorker(QObject):
                 creds, youtube_market.scene_query(self._scene)
             )
             self.finished.emit(type_beat.scan_market(titles))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
+class UpdateCheckWorker(QObject):
+    found = Signal(object)  # updater.UpdateInfo
+    none_found = Signal()
+    failed = Signal(str)
+
+    def run(self) -> None:
+        try:
+            info = updater.check_for_update()
+        except Exception as exc:  # noqa: BLE001 - a failed check should never bother the user
+            self.failed.emit(str(exc))
+            return
+        if info:
+            self.found.emit(info)
+        else:
+            self.none_found.emit()
+
+
+class UpdateDownloadWorker(QObject):
+    progress = Signal(float)
+    ready = Signal(Path)  # path to the downloaded exe, ready to apply
+    failed = Signal(str)
+
+    def __init__(self, info: updater.UpdateInfo):
+        super().__init__()
+        self._info = info
+
+    def run(self) -> None:
+        try:
+            path = updater.download_update(self._info, on_progress=self.progress.emit)
+            self.ready.emit(path)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
 

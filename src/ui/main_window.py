@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import tempfile
 import webbrowser
 from datetime import date, datetime, timedelta
@@ -16,8 +17,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
-    QMenuBar,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -28,9 +29,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core import youtube_auth
+from core import updater, youtube_auth
 from core.audio_tag import AudioTagSpec
 from core.config import load_config, update_config
+from core.version import APP_VERSION
 from core.video import WATERMARK_MAX_SIZE, WATERMARK_MIN_SIZE, Watermark
 from core.youtube_upload import UploadRequest
 from ui.analytics_page import AnalyticsPage
@@ -38,7 +40,14 @@ from ui.market_page import MarketPage
 from ui.settings_dialog import SettingsDialog
 from ui.suggestions_page import SuggestionsPage
 from ui.widgets import NoScrollComboBox, NoScrollDateEdit, PresetBar, VideoPreview
-from ui.workers import PublishJob, PublishWorker, SignInWorker, run_worker_in_thread
+from ui.workers import (
+    PublishJob,
+    PublishWorker,
+    SignInWorker,
+    UpdateCheckWorker,
+    UpdateDownloadWorker,
+    run_worker_in_thread,
+)
 
 CATEGORIES = [
     ("Music", "10"),
@@ -84,11 +93,11 @@ class MainWindow(QMainWindow):
         self._worker = None
         self._work_dir = Path(tempfile.mkdtemp(prefix="sonara_"))
 
-        self._build_menu()
         self._build_ui()
         self._restore_last_used()
         self._refresh_account_state()
         self._fit_to_content_height()
+        self._check_for_updates()
 
     def _size_to_screen_fraction(self, fraction: float) -> None:
         screen = QApplication.primaryScreen()
@@ -125,13 +134,6 @@ class MainWindow(QMainWindow):
             available.y() + max(0, (available.height() - self.height()) // 2),
         )
 
-    # ---------------------------------------------------------------- menu
-    def _build_menu(self) -> None:
-        menu_bar: QMenuBar = self.menuBar()
-        settings_menu = menu_bar.addMenu("&Settings")
-        open_settings = settings_menu.addAction("Google API Credentials…")
-        open_settings.triggered.connect(self._open_settings)
-
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
 
@@ -141,6 +143,11 @@ class MainWindow(QMainWindow):
         tabs.setDocumentMode(True)  # flat tab bar, no light Fusion base strip
         self._tabs = tabs
         self.setCentralWidget(tabs)
+
+        self.settings_btn = QPushButton("Settings")
+        self.settings_btn.setCursor(Qt.PointingHandCursor)
+        self.settings_btn.clicked.connect(self._open_settings)
+        tabs.setCornerWidget(self.settings_btn, Qt.TopRightCorner)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -650,3 +657,63 @@ class MainWindow(QMainWindow):
         self.publish_btn.setEnabled(True)
         self.stage_label.setText("Upload failed")
         QMessageBox.critical(self, "Publish failed", message)
+
+    # -------------------------------------------------------------- update
+    def _check_for_updates(self) -> None:
+        if not getattr(sys, "frozen", False):
+            return  # self-update only makes sense for the packaged .exe
+        worker = UpdateCheckWorker()
+        thread = run_worker_in_thread(worker, self)
+        worker.found.connect(self._on_update_found)
+        worker.found.connect(thread.quit)
+        worker.none_found.connect(thread.quit)
+        worker.failed.connect(thread.quit)  # a failed check is silent, never bothers the user
+        thread.start()
+        self._update_check_thread = thread
+        self._update_check_worker = worker
+
+    def _on_update_found(self, info: updater.UpdateInfo) -> None:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("Update available")
+        notes = f"\n\n{info.notes}" if info.notes else ""
+        box.setText(f"Sonara v{info.version} is available (you have v{APP_VERSION}).{notes}")
+        update_btn = box.addButton("Update Now", QMessageBox.AcceptRole)
+        box.addButton("Later", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is update_btn:
+            self._start_update_download(info)
+
+    def _start_update_download(self, info: updater.UpdateInfo) -> None:
+        dialog = QProgressDialog("Downloading update…", None, 0, 100, self)
+        dialog.setWindowTitle("Updating Sonara")
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setCancelButton(None)
+        dialog.setMinimumDuration(0)
+        dialog.setValue(0)
+        dialog.show()
+        self._update_progress_dialog = dialog
+
+        worker = UpdateDownloadWorker(info)
+        thread = run_worker_in_thread(worker, self)
+        worker.progress.connect(lambda fraction: dialog.setValue(int(fraction * 100)))
+        worker.ready.connect(self._on_update_ready)
+        worker.failed.connect(self._on_update_failed)
+        worker.ready.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.start()
+        self._update_download_thread = thread
+        self._update_download_worker = worker
+
+    def _on_update_ready(self, new_exe_path: Path) -> None:
+        self._update_progress_dialog.close()
+        try:
+            updater.apply_update_and_restart(new_exe_path)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Update failed", str(exc))
+            return
+        QApplication.quit()
+
+    def _on_update_failed(self, message: str) -> None:
+        self._update_progress_dialog.close()
+        QMessageBox.warning(self, "Update failed", message)

@@ -54,12 +54,28 @@ at `C:\ffmpeg\ffmpeg-master-latest-win64-gpl\bin`).
 .venv\Scripts\pyinstaller build.spec
 ```
 
-Output lands in `dist\Sonara\Sonara.exe` (or `dist\Sonara.exe` depending on
-PyInstaller mode — `build.spec` is currently a single-folder build).
+Output lands in `dist\Sonara.exe` — `build.spec` is a single-file build.
 
 To make the .exe fully self-contained (no separate ffmpeg install required on
 the machine you hand it to), copy `ffmpeg.exe` and `ffprobe.exe` into the same
 folder as `Sonara.exe` after building — the app checks next to itself first.
+
+## 4. Publishing an update (auto-update for other people)
+
+The app checks GitHub Releases on this repo at startup and offers to
+self-update if a newer version is published — no need to hand out a new
+.exe manually. To ship an update:
+
+1. Bump `APP_VERSION` in `src/core/version.py`.
+2. Build: `.venv\Scripts\pyinstaller build.spec`.
+3. On GitHub: **Releases → Draft a new release**, tag it `vX.Y.Z` matching
+   the version you just set (e.g. `v1.0.1`), and attach `dist\Sonara.exe`
+   as a release asset. Publish it.
+
+Anyone running the packaged .exe gets an "Update available" popup next time
+they open the app; clicking **Update Now** downloads the new exe, swaps it
+in, and relaunches automatically. This only works for the packaged .exe —
+running from source (`Sonara-dev.bat`) skips the check entirely.
 
 ## Notes / limitations
 
