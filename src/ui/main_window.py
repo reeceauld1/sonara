@@ -39,6 +39,7 @@ from ui.analytics_page import AnalyticsPage
 from ui.market_page import MarketPage
 from ui.settings_dialog import SettingsDialog
 from ui.suggestions_page import SuggestionsPage
+from ui.thumbnail_page import ThumbnailPage
 from ui.widgets import NoScrollComboBox, NoScrollDateEdit, PresetBar, VideoPreview
 from ui.workers import (
     PublishJob,
@@ -165,6 +166,10 @@ class MainWindow(QMainWindow):
 
         self.market_page = MarketPage()
         tabs.addTab(self.market_page, "Trends")
+
+        self.thumbnail_page = ThumbnailPage()
+        self.thumbnail_page.send_to_publish.connect(self._apply_cover_from_thumbnail)
+        tabs.addTab(self.thumbnail_page, "Thumbnail")
 
         root = QWidget()
         root.setObjectName("rootCanvas")
@@ -483,6 +488,15 @@ class MainWindow(QMainWindow):
         self.privacy_combo.setEnabled(not checked)
         if checked:
             self.privacy_combo.setCurrentText("Private")
+
+    def _apply_cover_from_thumbnail(self, path: str) -> None:
+        """The Thumbnail tab sends its framed crop here as the cover image for
+        the not-yet-uploaded video: it drives the render's picture and, with the
+        thumbnail box checked, the uploaded video's custom thumbnail."""
+        self.image_edit.setText(path)
+        self.preview.set_image(path)
+        self.thumbnail_check.setChecked(True)
+        self._tabs.setCurrentIndex(0)
 
     def _apply_suggested_title(self, title: str) -> None:
         self.title_edit.setText(title[:100])

@@ -19,6 +19,7 @@ def app_data_dir() -> Path:
 CONFIG_PATH = app_data_dir() / "config.json"
 TOKEN_PATH = app_data_dir() / "token.json"
 CLIENT_SECRETS_PATH = app_data_dir() / "client_secret.json"
+MODELS_DIR = app_data_dir() / "models"
 
 
 def load_config() -> dict[str, Any]:

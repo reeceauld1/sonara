@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from PIL import Image
 from PySide6.QtCore import QObject, QThread, Signal
 
 from core import type_beat
 from core import updater
+from core import upscale
 from core import video as video_core
 from core import youtube_auth
 from core import youtube_market
@@ -216,6 +218,55 @@ class UpdateDownloadWorker(QObject):
         try:
             path = updater.download_update(self._info, on_progress=self.progress.emit)
             self.ready.emit(path)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
+class UpscaleWorker(QObject):
+    """Downloads the AI upscale model on first use (a no-op after that), then
+    runs it over `image`. Runs off the UI thread since both steps can take a
+    while: the download is ~65MB and CPU inference is tiled and non-trivial
+    for anything bigger than a small source image."""
+
+    stage_changed = Signal(str)
+    progress = Signal(float)  # 0..1 within the current stage
+    finished = Signal(object)  # PIL.Image
+    failed = Signal(str)
+
+    def __init__(self, image: Image.Image):
+        super().__init__()
+        self._image = image
+
+    def run(self) -> None:
+        try:
+            if not upscale.is_model_downloaded():
+                self.stage_changed.emit("Downloading AI upscale model")
+                upscale.ensure_model(on_progress=self.progress.emit)
+            self.stage_changed.emit("Upscaling")
+            result = upscale.get_upscaler().upscale(self._image, on_progress=self.progress.emit)
+            self.finished.emit(result)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
+class SetThumbnailWorker(QObject):
+    """Pushes an already-exported thumbnail file straight onto an existing
+    YouTube video via the Data API - no manual download/reupload through
+    YouTube Studio."""
+
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(self, video_id: str, image_path: str):
+        super().__init__()
+        self._video_id = video_id
+        self._image_path = image_path
+
+    def run(self) -> None:
+        try:
+            creds = youtube_auth.get_credentials(interactive=True)
+            set_thumbnail(creds, self._video_id, self._image_path)
+            self.finished.emit()
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
 
